@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	bedrockruntimetypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 type Embeddings struct {
@@ -14,15 +17,21 @@ type Embeddings struct {
 	InputTextTokenCount int `json:"inputTextTokenCount"`
 }
 
+type AnthropicOutput struct {
+	Completion string `json:"completion"`
+	StopReason string `json:"stop_reason"`
+}
 
-func embeddingsDemo(bedrockSvc *bedrockruntime.BedrockRuntime) {
+
+
+func embeddingsDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client) {
 	modelInput := &bedrockruntime.InvokeModelInput{
 		ModelId: aws.String("amazon.titan-embed-text-v1"),
 		Accept: aws.String("*/*"),
 		ContentType: aws.String("application/json"),
 		Body: []byte(`{"inputText": "This is a test"}`),
 	}
-	result, err := bedrockSvc.InvokeModel(modelInput)
+	result, err := bedrockSvc.InvokeModel(ctx, modelInput)
 	if err != nil {
 		panic(err)
 	}
@@ -34,11 +43,11 @@ func embeddingsDemo(bedrockSvc *bedrockruntime.BedrockRuntime) {
 
 }
 
-func claudeInvokeStreamingDemo(bedrockSvc *bedrockruntime.BedrockRuntime) {
+func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client) {
 	var err error
 
 	jsonInput, err := json.Marshal(map[string]interface{}{
-		"prompt": "\n\nHuman: What is 2+2?\n\nAssistant",
+		"prompt": "\n\nHuman: What is 2+2?\n\nAssistant:",
 		"max_tokens_to_sample": 2048,
 		"temperature": 0.0,
 		"top_k": 250,
@@ -54,13 +63,12 @@ func claudeInvokeStreamingDemo(bedrockSvc *bedrockruntime.BedrockRuntime) {
 		ContentType: aws.String("application/json"),
 		Body: jsonInput,
 	}
-	result, err := bedrockSvc.InvokeModelWithResponseStream(modelInput)
+	result, err := bedrockSvc.InvokeModelWithResponseStream(ctx, modelInput)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("Response: ", result)
 	reader := result.GetStream().Reader
-	reader.Err()
 	eventsChannel := reader.Events()
 	for {
 		select {
@@ -69,17 +77,29 @@ func claudeInvokeStreamingDemo(bedrockSvc *bedrockruntime.BedrockRuntime) {
 				fmt.Println("Channel closed")
 				return
 			}
-			fmt.Println("Event: ", event)
+			x := event.(*bedrockruntimetypes.ResponseStreamMemberChunk)
+			var response AnthropicOutput
+			json.Unmarshal(x.Value.Bytes, &response)
+			fmt.Println("..")
+			fmt.Println("Stop reason: ", response.StopReason)
+			fmt.Println("Completion: ", response.Completion)
+		case <-ctx.Done():
+			fmt.Println("Context done")
 		}
 	}
 
 }
 
 func main() {
-	mySession := session.Must(session.NewSession())
-	bedrockSvc := bedrockruntime.New(mySession, aws.NewConfig().WithRegion("us-east-1"))
+	ctx := context.TODO()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		panic(err)
+	}
 
-	// embeddingsDemo(bedrockSvc)
+	bedrockSvc := bedrockruntime.NewFromConfig(cfg)
 
-	claudeInvokeStreamingDemo(bedrockSvc)
+	embeddingsDemo(ctx, bedrockSvc)
+
+	claudeInvokeStreamingDemo(ctx, bedrockSvc)
 }
