@@ -94,6 +94,9 @@ func main() {
 		cancel()
 	}()
 
+	// start timer
+	start := time.Now()
+
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		panic(err)
@@ -104,11 +107,16 @@ func main() {
 	prompts := []string{
 		"Write an essay on the topic of 'The History of the United States'.",
 		"Write an essay on the topic of 'The Battle of Gettysburg'.",
+		"Why an essay on the topic of 'French Revolution'",
+		"When was the Declaration of Independence signed?",
+		"Who was the first president of the United States?",
+		"What is the capital of the United States?",
+		"Explain nuclear fusion.",
+		"Tell me about Napoleon Bonaparte.",
 	}
 
 	k := len(prompts)
 
-	EmbeddingsDemo(ctx, prompts[1], bedrockSvc)
 
 	// create output channels
 	outchannels := make([]chan string, k)
@@ -120,12 +128,14 @@ func main() {
 		go ClaudeInvokeStreamingDemo(ctx, bedrockSvc, prompts[i], outchannels[i])
 	}
 
+	os.Mkdir("out", 0777)
+
 	// read from the output channels
 	for i := 0; i < k; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			outfile := fmt.Sprintf("output%d.md", i)
+			outfile := fmt.Sprintf("out/output%d.md", i)
 			f, err := os.Create(outfile)
 			if err != nil {
 				panic(err)
@@ -138,5 +148,10 @@ func main() {
 	}
 
 	wg.Wait()
+
+	// stop timer
+	elapsed := time.Since(start)
+
+	fmt.Printf("Time taken: %s\n", elapsed)
 
 }
