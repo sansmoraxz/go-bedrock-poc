@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,12 +27,19 @@ type AnthropicOutput struct {
 
 
 
-func embeddingsDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client) {
+func embeddingsDemo(ctx context.Context, prompt string, bedrockSvc *bedrockruntime.Client) {
+	// {"inputText": "This is a test"} as bytes
+	body, err := json.Marshal(map[string]interface{}{
+		"inputText": prompt,
+	})
+	if err != nil {
+		panic(err)
+	}
 	modelInput := &bedrockruntime.InvokeModelInput{
 		ModelId: aws.String("amazon.titan-embed-text-v1"),
 		Accept: aws.String("*/*"),
 		ContentType: aws.String("application/json"),
-		Body: []byte(`{"inputText": "This is a test"}`),
+		Body: body,
 	}
 	result, err := bedrockSvc.InvokeModel(ctx, modelInput)
 	if err != nil {
@@ -43,11 +53,13 @@ func embeddingsDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client) {
 
 }
 
-func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client) {
+func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client, prompt string, outChannel chan<- string) {
 	var err error
 
+	defer close(outChannel)
+
 	jsonInput, err := json.Marshal(map[string]interface{}{
-		"prompt": "\n\nHuman: What is 2+2?\n\nAssistant:",
+		"prompt": fmt.Sprintf("\n\nHuman: %s\n\nAssistant: ```md", prompt),
 		"max_tokens_to_sample": 2048,
 		"temperature": 0.0,
 		"top_k": 250,
@@ -70,36 +82,69 @@ func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.C
 	fmt.Println("Response: ", result)
 	reader := result.GetStream().Reader
 	eventsChannel := reader.Events()
-	for {
-		select {
-		case event, ok := <-eventsChannel:
-			if !ok {
-				fmt.Println("Channel closed")
-				return
-			}
-			x := event.(*bedrockruntimetypes.ResponseStreamMemberChunk)
-			var response AnthropicOutput
-			json.Unmarshal(x.Value.Bytes, &response)
-			fmt.Println("..")
-			fmt.Println("Stop reason: ", response.StopReason)
-			fmt.Println("Completion: ", response.Completion)
-		case <-ctx.Done():
-			fmt.Println("Context done")
-		}
+	for event := range eventsChannel {
+		x := event.(*bedrockruntimetypes.ResponseStreamMemberChunk)
+		var response AnthropicOutput
+		json.Unmarshal(x.Value.Bytes, &response)
+		outChannel <- response.Completion
 	}
 
 }
 
 func main() {
-	ctx := context.TODO()
+	// 5 mins timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer func ()  {
+		println("Canceling context")
+		cancel()
+	}()
+
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		panic(err)
 	}
-
 	bedrockSvc := bedrockruntime.NewFromConfig(cfg)
 
-	embeddingsDemo(ctx, bedrockSvc)
+	prompt1 := "Write an essay on the topic of 'The History of the United States'."
+	prompt2 := "Write an essay on the topic of 'The Battle of Gettysburg'."
 
-	claudeInvokeStreamingDemo(ctx, bedrockSvc)
+	// embeddingsDemo(ctx, prompt1, bedrockSvc)
+
+	// output channel for streaming demo
+	outChannel1 := make(chan string)
+	outChannel2 := make(chan string)
+	go claudeInvokeStreamingDemo(ctx, bedrockSvc, prompt1, outChannel1)
+	go claudeInvokeStreamingDemo(ctx, bedrockSvc, prompt2, outChannel2)
+
+	// read from the output channels
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		f, err := os.Create("output1.txt")
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		for out := range outChannel1 {
+			fmt.Println("Prompt 1: ", out)
+			f.WriteString(out)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		f, err := os.Create("output2.txt")
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		for out := range outChannel2 {
+			fmt.Println("Prompt 2: ", out)
+			f.WriteString(out)
+		}
+	}()
+
+	wg.Wait()
+
 }
