@@ -20,14 +20,9 @@ type Embeddings struct {
 	InputTextTokenCount int `json:"inputTextTokenCount"`
 }
 
-type AnthropicOutput struct {
-	Completion string `json:"completion"`
-	StopReason string `json:"stop_reason"`
-}
 
 
-
-func embeddingsDemo(ctx context.Context, prompt string, bedrockSvc *bedrockruntime.Client) {
+func EmbeddingsDemo(ctx context.Context, prompt string, bedrockSvc *bedrockruntime.Client) {
 	// {"inputText": "This is a test"} as bytes
 	body, err := json.Marshal(map[string]interface{}{
 		"inputText": prompt,
@@ -53,19 +48,19 @@ func embeddingsDemo(ctx context.Context, prompt string, bedrockSvc *bedrockrunti
 
 }
 
-func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client, prompt string, outChannel chan<- string) {
+func ClaudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client, prompt string, outChannel chan<- string) {
 	var err error
 
 	defer close(outChannel)
-
-	jsonInput, err := json.Marshal(map[string]interface{}{
-		"prompt": fmt.Sprintf("\n\nHuman: %s\n\nAssistant: ```md", prompt),
-		"max_tokens_to_sample": 2048,
-		"temperature": 0.0,
-		"top_k": 250,
-		"top_p": 0.999,
-		"stop_sequences": []string{"Human:"},
+	jsonInput, err := json.Marshal(AnthropicInput{
+		Prompt: fmt.Sprintf("\n\nHuman: %s\n\nAssistant: ```md", prompt),
+		MaxTokensToSample: 2048,
+		Temperature: 0.0,
+		TopK: 250,
+		TopP: 0.999,
+		StopSequences: []string{"Human:"},
 	})
+	
 	if err != nil {
 		panic(err)
 	}
@@ -82,11 +77,11 @@ func claudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.C
 	fmt.Println("Response: ", result)
 	reader := result.GetStream().Reader
 	eventsChannel := reader.Events()
+	var modelOutput AnthropicOutput
 	for event := range eventsChannel {
 		x := event.(*bedrockruntimetypes.ResponseStreamMemberChunk)
-		var response AnthropicOutput
-		json.Unmarshal(x.Value.Bytes, &response)
-		outChannel <- response.Completion
+		json.Unmarshal(x.Value.Bytes, &modelOutput)
+		outChannel <- modelOutput.Completion
 	}
 
 }
@@ -105,45 +100,42 @@ func main() {
 	}
 	bedrockSvc := bedrockruntime.NewFromConfig(cfg)
 
-	prompt1 := "Write an essay on the topic of 'The History of the United States'."
-	prompt2 := "Write an essay on the topic of 'The Battle of Gettysburg'."
+	
+	prompts := []string{
+		"Write an essay on the topic of 'The History of the United States'.",
+		"Write an essay on the topic of 'The Battle of Gettysburg'.",
+	}
 
-	// embeddingsDemo(ctx, prompt1, bedrockSvc)
+	k := len(prompts)
 
-	// output channel for streaming demo
-	outChannel1 := make(chan string)
-	outChannel2 := make(chan string)
-	go claudeInvokeStreamingDemo(ctx, bedrockSvc, prompt1, outChannel1)
-	go claudeInvokeStreamingDemo(ctx, bedrockSvc, prompt2, outChannel2)
+	EmbeddingsDemo(ctx, prompts[1], bedrockSvc)
+
+	// create output channels
+	outchannels := make([]chan string, k)
+	wg := sync.WaitGroup{}
+
+	// create goroutines
+	for i := 0; i < k; i++ {
+		outchannels[i] = make(chan string)
+		go ClaudeInvokeStreamingDemo(ctx, bedrockSvc, prompts[i], outchannels[i])
+	}
 
 	// read from the output channels
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		f, err := os.Create("output1.txt")
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-		for out := range outChannel1 {
-			fmt.Println("Prompt 1: ", out)
-			f.WriteString(out)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		f, err := os.Create("output2.txt")
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-		for out := range outChannel2 {
-			fmt.Println("Prompt 2: ", out)
-			f.WriteString(out)
-		}
-	}()
+	for i := 0; i < k; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			outfile := fmt.Sprintf("output%d.md", i)
+			f, err := os.Create(outfile)
+			if err != nil {
+				panic(err)
+			}
+			for out := range outchannels[i] {
+				fmt.Println("Prompt ", i, ": ", out)
+				f.WriteString(out)
+			}
+		}(i)
+	}
 
 	wg.Wait()
 
