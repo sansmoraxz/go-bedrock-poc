@@ -48,17 +48,22 @@ func EmbeddingsDemo(ctx context.Context, prompt string, bedrockSvc *bedrockrunti
 
 }
 
-func ClaudeInvokeStreamingDemo(ctx context.Context, bedrockSvc *bedrockruntime.Client, prompt string, outChannel chan<- string) {
+func ClaudeInvokeStreamingDemo(
+	ctx context.Context,
+	bedrockSvc *bedrockruntime.Client,
+	conv Conversation,
+	convAppend string,
+	outChannel chan<- string) {
 	var err error
 
 	defer close(outChannel)
 	jsonInput, err := json.Marshal(AnthropicInput{
-		Prompt: fmt.Sprintf("\n\nHuman: %s\n\nAssistant: ```md", prompt),
+		Prompt: conv.ToString() + convAppend,
 		MaxTokensToSample: 2048,
 		Temperature: 0.0,
 		TopK: 250,
 		TopP: 0.999,
-		StopSequences: []string{"Human:"},
+		StopSequences: []string{"Human:", "```"},
 	})
 	
 	if err != nil {
@@ -115,6 +120,8 @@ func main() {
 		"Tell me about Napoleon Bonaparte.",
 	}
 
+	conversations := make([]Conversation, len(prompts))
+
 	k := len(prompts)
 
 
@@ -125,7 +132,11 @@ func main() {
 	// create goroutines
 	for i := 0; i < k; i++ {
 		outchannels[i] = make(chan string)
-		go ClaudeInvokeStreamingDemo(ctx, bedrockSvc, prompts[i], outchannels[i])
+		conv := Conversation{}
+		conv.AddMessage("Human", prompts[i])
+		conversations[i] = conv
+		// use markdown for formatting
+		go ClaudeInvokeStreamingDemo(ctx, bedrockSvc, conv, "\n\nAssistant: ```md", outchannels[i])
 	}
 
 	os.Mkdir("out", 0777)
