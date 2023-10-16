@@ -1,0 +1,45 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Build
+      run: |
+        GOOS=linux GOARCH=amd64 go build -o bin/linux-amd64-demo -v ./...
+        GOOS=linux GOARCH=arm64 go build -o bin/linux-arm64-demo -v ./...
+        GOOS=windows GOARCH=amd64 go build -o bin/windows-amd64-demo.exe -v ./...
+        GOOS=windows GOARCH=arm64 go build -o bin/windows-arm64-demo.exe -v ./...
+        GOOS=darwin GOARCH=amd64 go build -o bin/darwin-amd64-demo -v ./...
+        GOOS=darwin GOARCH=arm64 go build -o bin/darwin-arm64-demo -v ./...
+    
+    - name: Create release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        prerelease: true
+        tag_name: ${{ github.ref_name }}
+        body: |
+          Build for commit ${{ github.sha }}
+          Demo files binaries for linux, windows and macos
+        files: |
+            bin/**
